@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Планировщик дня — Залив</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .progress-bar { transition: width 0.6s ease; }
+        .completed { text-decoration: line-through; opacity: 0.75; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 via-violet-50 to-cyan-50 min-h-screen pb-12">
+
+<div class="max-w-3xl mx-auto px-4 pt-8">
+
+    <div class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-4xl font-semibold text-gray-900">📅 Планировщик + Залив</h1>
+            <p id="status" class="text-sm text-emerald-600 font-medium">Подключение к облаку...</p>
+        </div>
+        <button onclick="clearDay()" class="bg-white hover:bg-red-50 text-red-600 px-6 py-3 rounded-2xl font-medium border border-red-200">
+            🗑️ Сбросить день
+        </button>
+    </div>
+
+    <!-- Общий прогресс -->
+    <div class="bg-white rounded-3xl shadow-2xl p-8 mb-10">
+        <div class="flex justify-between mb-3">
+            <span class="text-lg font-semibold text-gray-700">Общий прогресс дня</span>
+            <span id="overall-progress" class="text-5xl font-bold text-violet-600">0%</span>
+        </div>
+        <div class="h-5 bg-gray-100 rounded-full overflow-hidden">
+            <div id="overall-bar" class="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 progress-bar" style="width:0%"></div>
+        </div>
+    </div>
+
+    <!-- Задачи -->
+    <div class="bg-white rounded-3xl shadow-xl p-6 mb-10">
+        <h2 class="text-2xl font-semibold mb-5">Задачи на сегодня</h2>
+        <form onsubmit="addTask(event)" class="flex gap-3 mb-6">
+            <input id="task-input" type="text" placeholder="Новая задача..." 
+                   class="flex-1 px-6 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:border-violet-400 text-lg">
+            <button type="submit" class="px-8 bg-violet-600 hover:bg-violet-700 text-white font-semibold rounded-2xl">Добавить</button>
+        </form>
+        <ul id="task-list" class="space-y-3"></ul>
+    </div>
+
+    <!-- Залив телефонов -->
+    <div class="bg-white rounded-3xl shadow-xl p-6">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold">📱 Залив телефонов</h2>
+            <button onclick="showConfigModal()" 
+                    class="px-8 py-4 bg-violet-600 hover:bg-violet-700 text-white font-semibold rounded-2xl transition-all">
+                ⚙️ Настроить трубки и аккаунты
+            </button>
+        </div>
+
+        <div id="phones-list" class="space-y-6"></div>
+
+        <!-- Результаты -->
+        <div class="mt-10 bg-emerald-50 rounded-3xl p-6">
+            <h3 class="font-semibold text-emerald-800 mb-4">📊 Результаты залива сегодня</h3>
+            <div id="zaliy-results" class="grid grid-cols-3 gap-6"></div>
+            <div class="mt-6 text-center text-lg">
+                Общий процент залива: <span id="total-zaliy-percent" class="font-bold text-4xl text-emerald-600">0%</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модалка -->
+<div id="config-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div class="p-6 border-b flex justify-between items-center">
+            <h3 class="text-2xl font-semibold">Настройка трубок и аккаунтов</h3>
+            <button onclick="hideConfigModal()" class="text-4xl text-gray-400 hover:text-black">×</button>
+        </div>
+        <div id="config-content" class="p-6 overflow-auto flex-1"></div>
+        <div class="p-6 border-t flex gap-3">
+            <button onclick="hideConfigModal()" class="flex-1 py-4 border rounded-2xl font-medium">Отмена</button>
+            <button onclick="saveConfig()" class="flex-1 py-4 bg-violet-600 text-white rounded-2xl font-semibold">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ==================== ТВОЙ FIREBASE CONFIG ====================
+const firebaseConfig = {
+  apiKey: "AIzaSyAurX4ax0AAWBBu0XdHb-yMSj7ygNQu6Xk",
+  authDomain: "my-daily-planner-8f08f.firebaseapp.com",
+  projectId: "my-daily-planner-8f08f",
+  storageBucket: "my-daily-planner-8f08f.firebasestorage.app",
+  messagingSenderId: "960600001744",
+  appId: "1:960600001744:web:f606312c1f216beffca2d5"
+};
+
+// Инициализация Firebase
+const app = firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const dbRef = db.ref('plannerData');
+
+// ==================== ПЕРЕМЕННЫЕ ====================
+let tasks = [];
+let phones = [];
+let currentDate = '';
+let isConnected = false;
+
+const platforms = {
+    tiktok: { name: 'TikTok', emoji: '🎵' },
+    youtube: { name: 'YouTube', emoji: '📺' },
+    instagram: { name: 'Instagram', emoji: '📸' }
+};
+
+// ==================== ЗАГРУЗКА ДАННЫХ ИЗ FIREBASE ====================
+function loadData() {
+    currentDate = new Date().toISOString().split('T')[0];
+
+    dbRef.once('value', (snapshot) => {
+        const data = snapshot.val() || {};
+
+        // Загружаем задачи и трубки
+        tasks = data.tasks || [];
+        phones = data.phones || [{ id: 1, name: "Трубка 1", accounts: [] }];
+
+        // Если новый день — обнуляем только "done"
+        if (data.lastDate !== currentDate) {
+            phones.forEach(phone => {
+                phone.accounts.forEach(acc => acc.done = 0);
+            });
+            saveToFirebase();
+        }
+
+        renderTasks();
+        renderPhones();
+        updateOverallProgress();
+        document.getElementById('status').innerHTML = '✅ Подключено к облаку';
+        document.getElementById('status').classList.add('text-emerald-600');
+    });
+}
+
+// ==================== СОХРАНЕНИЕ В FIREBASE ====================
+function saveToFirebase() {
+    dbRef.update({
+        tasks: tasks,
+        phones: phones,
+        lastDate: currentDate
+    });
+}
+
+// ==================== ЗАДАЧИ ====================
+function renderTasks() {
+    const list = document.getElementById('task-list');
+    list.innerHTML = '';
+    if (tasks.length === 0) {
+        list.innerHTML = `<p class="text-gray-400 py-8 text-center">Нет задач — добавь первую</p>`;
+        return;
+    }
+    tasks.forEach((task, i) => {
+        const li = document.createElement('li');
+        li.className = `flex items-center gap-4 bg-gray-50 px-6 py-4 rounded-2xl`;
+        li.innerHTML = `
+            <input type="checkbox" ${task.completed ? 'checked' : ''} class="w-6 h-6 accent-violet-600" onchange="toggleTask(${i})">
+            <span class="flex-1 ${task.completed ? 'completed' : ''}">${task.text}</span>
+            <button onclick="deleteTask(${i}); event.stopImmediatePropagation()" class="text-xl text-gray-400 hover:text-red-500">🗑️</button>
+        `;
+        list.appendChild(li);
+    });
+}
+
+function addTask(e) {
+    e.preventDefault();
+    const input = document.getElementById('task-input');
+    if (!input.value.trim()) return;
+    tasks.push({ text: input.value.trim(), completed: false });
+    input.value = '';
+    renderTasks();
+    saveToFirebase();
+    updateOverallProgress();
+}
+
+function toggleTask(i) {
+    tasks[i].completed = !tasks[i].completed;
+    renderTasks();
+    saveToFirebase();
+    updateOverallProgress();
+}
+
+function deleteTask(i) {
+    tasks.splice(i, 1);
+    renderTasks();
+    saveToFirebase();
+    updateOverallProgress();
+}
+
+// ==================== МОДАЛКА И ЗАЛИВ ====================
+function showConfigModal() {
+    let html = `<div class="space-y-8">`;
+    phones.forEach((phone, pIndex) => {
+        html += `
+        <div class="border border-violet-200 rounded-3xl p-5">
+            <div class="flex gap-3 mb-4">
+                <input value="${phone.name}" onchange="phones[${pIndex}].name = this.value; saveToFirebase()" 
+                       class="flex-1 font-semibold text-lg border-b-2 focus:outline-none">
+                <button onclick="deletePhone(${pIndex})" class="text-red-500 text-2xl">🗑️</button>
+            </div>
+            <div class="space-y-4">
+                ${phone.accounts.map((acc, aIndex) => `
+                <div class="bg-gray-50 rounded-2xl p-4 grid grid-cols-12 gap-3 items-center">
+                    <div class="col-span-3">
+                        <select onchange="phones[${pIndex}].accounts[${aIndex}].platform = this.value; saveToFirebase()" class="w-full p-3 rounded-xl border">
+                            ${Object.keys(platforms).map(pl => `<option value="${pl}" ${acc.platform === pl ? 'selected' : ''}>${platforms[pl].emoji} ${platforms[pl].name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-span-4">
+                        <input value="${acc.theme || 'Общая'}" placeholder="Тематика" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].theme = this.value; saveToFirebase()" 
+                               class="w-full p-3 rounded-xl border">
+                    </div>
+                    <div class="col-span-3">
+                        <input type="number" value="${acc.plan || 10}" min="0" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].plan = parseInt(this.value)||0; saveToFirebase()" 
+                               class="w-full p-3 rounded-xl border text-center font-semibold">
+                    </div>
+                    <div class="col-span-2">
+                        <button onclick="deleteAccount(${pIndex},${aIndex})" class="w-full py-3 text-red-500 text-xl">×</button>
+                    </div>
+                </div>`).join('')}
+            </div>
+            <button onclick="addAccount(${pIndex})" class="mt-4 w-full py-3 border border-dashed border-violet-400 text-violet-600 rounded-2xl hover:bg-violet-50">
+                + Добавить аккаунт
+            </button>
+        </div>`;
+    });
+    html += `<button onclick="addPhone()" class="w-full py-5 border-2 border-dashed border-violet-300 text-violet-600 rounded-3xl hover:border-violet-400">+ Добавить новую трубку</button></div>`;
+
+    document.getElementById('config-content').innerHTML = html;
+    document.getElementById('config-modal').classList.remove('hidden');
+}
+
+function hideConfigModal() {
+    document.getElementById('config-modal').classList.add('hidden');
+    renderPhones();
+    updateOverallProgress();
+}
+
+function addPhone() {
+    phones.push({ id: Date.now(), name: `Трубка ${phones.length + 1}`, accounts: [] });
+    saveToFirebase();
+    showConfigModal();
+}
+
+function deletePhone(pIndex) {
+    if (confirm('Удалить трубку?')) {
+        phones.splice(pIndex, 1);
+        saveToFirebase();
+        showConfigModal();
+    }
+}
+
+function addAccount(pIndex) {
+    phones[pIndex].accounts.push({ id: Date.now(), platform: 'tiktok', theme: 'Общая', plan: 10, done: 0 });
+    saveToFirebase();
+    showConfigModal();
+}
+
+function deleteAccount(pIndex, aIndex) {
+    phones[pIndex].accounts.splice(aIndex, 1);
+    saveToFirebase();
+    showConfigModal();
+}
+
+function saveConfig() {
+    saveToFirebase();
+    hideConfigModal();
+}
+
+// ==================== ОТРИСОВКА ЗАЛИВА ====================
+function renderPhones() {
+    const container = document.getElementById('phones-list');
+    container.innerHTML = '';
+
+    if (phones.length === 0 || phones.every(p => p.accounts.length === 0)) {
+        container.innerHTML = `<p class="text-center text-gray-400 py-12">Нажми кнопку "Настроить трубки и аккаунты"</p>`;
+        return;
+    }
+
+    phones.forEach((phone, pIndex) => {
+        let accHTML = phone.accounts.map((acc, aIndex) => {
+            const plat = platforms[acc.platform] || {emoji:'📱', name:acc.platform};
+            return `
+            <div class="flex items-center gap-4 bg-gray-50 rounded-2xl p-5">
+                <div class="text-4xl w-12">${plat.emoji}</div>
+                <div class="flex-1">
+                    <div class="font-medium">${acc.theme || 'Без тематики'}</div>
+                    <div class="text-sm text-gray-500">${plat.name}</div>
+                </div>
+                <div class="flex gap-6">
+                    <div>
+                        <div class="text-xs text-gray-500">План</div>
+                        <input type="number" value="${acc.plan}" min="0" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].plan = parseInt(this.value)||0; saveToFirebase(); updateOverallProgress()" 
+                               class="w-20 text-center font-semibold bg-white border rounded-xl py-2">
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-500">Залито</div>
+                        <input type="number" value="${acc.done || 0}" min="0" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].done = parseInt(this.value)||0; saveToFirebase(); updateOverallProgress()" 
+                               class="w-20 text-center font-semibold bg-emerald-50 border border-emerald-300 rounded-xl py-2">
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+
+        const div = document.createElement('div');
+        div.className = 'border border-gray-200 rounded-3xl p-6';
+        div.innerHTML = `
+            <div class="flex items-center gap-3 mb-5">
+                <span class="text-3xl">📱</span>
+                <span class="text-xl font-semibold">${phone.name}</span>
+            </div>
+            <div class="space-y-3">${accHTML}</div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function calculateZaliyProgress() {
+    let plan = 0, done = 0;
+    phones.forEach(phone => phone.accounts.forEach(acc => {
+        plan += Number(acc.plan) || 0;
+        done += Number(acc.done) || 0;
+    }));
+    return plan === 0 ? 0 : Math.round((done / plan) * 100);
+}
+
+function renderZaliyResults() {
+    const container = document.getElementById('zaliy-results');
+    container.innerHTML = '';
+    const byPlat = { tiktok: {d:0,p:0}, youtube: {d:0,p:0}, instagram: {d:0,p:0} };
+
+    phones.forEach(phone => {
+        phone.accounts.forEach(acc => {
+            if (byPlat[acc.platform]) {
+                byPlat[acc.platform].d += Number(acc.done) || 0;
+                byPlat[acc.platform].p += Number(acc.plan) || 0;
+            }
+        });
+    });
+
+    Object.keys(byPlat).forEach(key => {
+        const item = byPlat[key];
+        const perc = item.p === 0 ? 0 : Math.round((item.d / item.p) * 100);
+        const plat = platforms[key];
+        const div = document.createElement('div');
+        div.className = 'text-center bg-white rounded-2xl p-5 shadow-sm';
+        div.innerHTML = `
+            <div class="text-5xl mb-2">${plat.emoji}</div>
+            <div class="font-semibold">${plat.name}</div>
+            <div class="text-3xl font-bold text-emerald-600 my-1">${item.d} / ${item.p}</div>
+            <div class="text-emerald-600">${perc}%</div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function updateOverallProgress() {
+    const taskPercent = tasks.length === 0 ? 0 : Math.round(tasks.filter(t => t.completed).length / tasks.length * 100);
+    const zaliyPercent = calculateZaliyProgress();
+    const overall = Math.round((taskPercent + zaliyPercent) / 2);
+
+    document.getElementById('overall-progress').textContent = overall + '%';
+    document.getElementById('overall-bar').style.width = overall + '%';
+    document.getElementById('total-zaliy-percent').textContent = zaliyPercent + '%';
+}
+
+function clearDay() {
+    if (confirm('Сбросить весь день?')) {
+        tasks = [];
+        phones.forEach(phone => phone.accounts.forEach(acc => acc.done = 0));
+        saveToFirebase();
+        renderTasks();
+        renderPhones();
+        updateOverallProgress();
+    }
+}
+
+// ==================== ЗАПУСК ====================
+function init() {
+    loadData();
+    renderTasks();
+    renderPhones();
+    updateOverallProgress();
+
+    // Реальное время обновления с других устройств
+    dbRef.on('value', (snapshot) => {
+        const data = snapshot.val() || {};
+        if (data.tasks) tasks = data.tasks;
+        if (data.phones) phones = data.phones;
+        renderTasks();
+        renderPhones();
+        updateOverallProgress();
+    });
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
