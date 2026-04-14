@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Планировщик дня — Залив</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .progress-bar { transition: width 0.6s ease; }
+        .completed { text-decoration: line-through; opacity: 0.75; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 via-violet-50 to-cyan-50 min-h-screen pb-12">
+
+<div class="max-w-3xl mx-auto px-4 pt-8">
+
+    <div class="flex justify-between items-center mb-8">
+        <h1 class="text-4xl font-semibold text-gray-900">📅 Планировщик + Залив</h1>
+        <button onclick="clearDay()" class="bg-white hover:bg-red-50 text-red-600 px-6 py-3 rounded-2xl font-medium border border-red-200 flex items-center gap-2">
+            🗑️ Сбросить день
+        </button>
+    </div>
+
+    <!-- Общий прогресс -->
+    <div class="bg-white rounded-3xl shadow-2xl p-8 mb-10">
+        <div class="flex justify-between mb-3">
+            <span class="text-lg font-semibold text-gray-700">Общий прогресс дня</span>
+            <span id="overall-progress" class="text-5xl font-bold text-violet-600">0%</span>
+        </div>
+        <div class="h-5 bg-gray-100 rounded-full overflow-hidden">
+            <div id="overall-bar" class="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 progress-bar" style="width:0%"></div>
+        </div>
+        <div class="text-xs text-gray-500 mt-2 text-center">Сохранение работает автоматически</div>
+    </div>
+
+    <!-- Задачи -->
+    <div class="bg-white rounded-3xl shadow-xl p-6 mb-10">
+        <h2 class="text-2xl font-semibold mb-5">Задачи на сегодня</h2>
+        <form onsubmit="addTask(event)" class="flex gap-3 mb-6">
+            <input id="task-input" type="text" placeholder="Новая задача..." 
+                   class="flex-1 px-6 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:border-violet-400 text-lg">
+            <button type="submit" class="px-8 bg-violet-600 hover:bg-violet-700 text-white font-semibold rounded-2xl">Добавить</button>
+        </form>
+        <ul id="task-list" class="space-y-3"></ul>
+    </div>
+
+    <!-- Залив телефонов -->
+    <div class="bg-white rounded-3xl shadow-xl p-6">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold">📱 Залив телефонов</h2>
+            <button onclick="showConfigModal()" 
+                    class="px-8 py-4 bg-violet-600 hover:bg-violet-700 text-white font-semibold rounded-2xl transition-all active:scale-95">
+                ⚙️ Настроить трубки и аккаунты
+            </button>
+        </div>
+
+        <div id="phones-list" class="space-y-6"></div>
+
+        <!-- Результаты -->
+        <div class="mt-10 bg-emerald-50 border border-emerald-200 rounded-3xl p-6">
+            <h3 class="font-semibold text-emerald-800 mb-4">📊 Результаты залива сегодня</h3>
+            <div id="zaliy-results" class="grid grid-cols-3 gap-6"></div>
+            <div class="mt-6 text-center text-lg">
+                Общий процент залива: <span id="total-zaliy-percent" class="font-bold text-4xl text-emerald-600">0%</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модалка конфигурации -->
+<div id="config-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div class="p-6 border-b flex justify-between items-center">
+            <h3 class="text-2xl font-semibold">Настройка трубок и аккаунтов</h3>
+            <button onclick="hideConfigModal()" class="text-4xl text-gray-400 hover:text-black">×</button>
+        </div>
+        <div id="config-content" class="p-6 overflow-auto flex-1"></div>
+        <div class="p-6 border-t flex gap-3">
+            <button onclick="hideConfigModal()" class="flex-1 py-4 border border-gray-300 rounded-2xl font-medium">Отмена</button>
+            <button onclick="saveConfig()" class="flex-1 py-4 bg-violet-600 text-white rounded-2xl font-semibold">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+let tasks = [];
+let phones = [];
+let currentDate = '';
+
+const platforms = {
+    tiktok: { name: 'TikTok', emoji: '🎵' },
+    youtube: { name: 'YouTube', emoji: '📺' },
+    instagram: { name: 'Instagram', emoji: '📸' }
+};
+
+// ==================== СОХРАНЕНИЕ И ЗАГРУЗКА ====================
+function getToday() {
+    return new Date().toISOString().split('T')[0];
+}
+
+function loadData() {
+    currentDate = getToday();
+
+    // Загружаем дату
+    const savedDate = localStorage.getItem('lastDate');
+    if (savedDate !== currentDate) {
+        tasks = [];
+        // Обнуляем только выполненное (done), планы остаются
+        if (phones.length > 0) phones.forEach(p => p.accounts.forEach(a => a.done = 0));
+        localStorage.setItem('lastDate', currentDate);
+    } else {
+        // Загружаем задачи
+        const savedTasks = localStorage.getItem('dailyTasks');
+        if (savedTasks) tasks = JSON.parse(savedTasks);
+
+        // Загружаем конфиг трубок
+        const savedPhones = localStorage.getItem('phoneConfig');
+        if (savedPhones) phones = JSON.parse(savedPhones);
+    }
+
+    // Если первый запуск — создаём дефолтную трубку
+    if (phones.length === 0) {
+        phones = [{ id: 1, name: "Трубка 1", accounts: [] }];
+        savePhones();
+    }
+}
+
+function saveTasks() {
+    localStorage.setItem('dailyTasks', JSON.stringify(tasks));
+}
+
+function savePhones() {
+    localStorage.setItem('phoneConfig', JSON.stringify(phones));
+}
+
+// ==================== МОДАЛКА ====================
+function showConfigModal() {
+    let html = `<div class="space-y-8">`;
+
+    phones.forEach((phone, pIndex) => {
+        html += `
+        <div class="border border-violet-200 rounded-3xl p-5">
+            <div class="flex items-center gap-3 mb-4">
+                <input value="${phone.name}" onchange="phones[${pIndex}].name = this.value; savePhones()" 
+                       class="flex-1 font-semibold text-lg border-b-2 border-violet-300 focus:outline-none focus:border-violet-500">
+                <button onclick="deletePhone(${pIndex})" class="text-red-500 text-2xl px-2">🗑️</button>
+            </div>
+            <div class="space-y-4">
+                ${phone.accounts.map((acc, aIndex) => `
+                <div class="bg-gray-50 rounded-2xl p-4 grid grid-cols-12 gap-3 items-center">
+                    <div class="col-span-3">
+                        <select onchange="phones[${pIndex}].accounts[${aIndex}].platform = this.value; savePhones()" class="w-full p-3 rounded-xl border">
+                            ${Object.keys(platforms).map(pl => `<option value="${pl}" ${acc.platform === pl ? 'selected' : ''}>${platforms[pl].emoji} ${platforms[pl].name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="col-span-4">
+                        <input value="${acc.theme || 'Общая'}" placeholder="Тематика" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].theme = this.value; savePhones()" 
+                               class="w-full p-3 rounded-xl border">
+                    </div>
+                    <div class="col-span-3">
+                        <input type="number" value="${acc.plan || 10}" min="0" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].plan = parseInt(this.value)||0; savePhones()" 
+                               class="w-full p-3 rounded-xl border text-center font-semibold">
+                    </div>
+                    <div class="col-span-2">
+                        <button onclick="deleteAccount(${pIndex}, ${aIndex})" class="w-full py-3 text-red-500 text-xl">×</button>
+                    </div>
+                </div>`).join('')}
+            </div>
+            <button onclick="addAccount(${pIndex})" class="mt-4 w-full py-3 border border-dashed border-violet-400 text-violet-600 rounded-2xl hover:bg-violet-50">
+                + Добавить аккаунт на эту трубку
+            </button>
+        </div>`;
+    });
+
+    html += `<button onclick="addPhone()" class="w-full py-5 border-2 border-dashed border-violet-300 text-violet-600 rounded-3xl hover:border-violet-400">+ Добавить новую трубку</button></div>`;
+
+    document.getElementById('config-content').innerHTML = html;
+    document.getElementById('config-modal').classList.remove('hidden');
+}
+
+function hideConfigModal() {
+    document.getElementById('config-modal').classList.add('hidden');
+    renderPhones();
+    updateOverallProgress();
+}
+
+function addPhone() {
+    phones.push({ id: Date.now(), name: `Трубка ${phones.length + 1}`, accounts: [] });
+    savePhones();
+    showConfigModal();
+}
+
+function deletePhone(pIndex) {
+    if (confirm('Удалить трубку со всеми аккаунтами?')) {
+        phones.splice(pIndex, 1);
+        savePhones();
+        showConfigModal();
+    }
+}
+
+function addAccount(pIndex) {
+    phones[pIndex].accounts.push({ id: Date.now(), platform: 'tiktok', theme: 'Общая', plan: 10, done: 0 });
+    savePhones();
+    showConfigModal();
+}
+
+function deleteAccount(pIndex, aIndex) {
+    phones[pIndex].accounts.splice(aIndex, 1);
+    savePhones();
+    showConfigModal();
+}
+
+function saveConfig() {
+    savePhones();
+    hideConfigModal();
+}
+
+// ==================== ЗАДАЧИ ====================
+function renderTasks() {
+    const list = document.getElementById('task-list');
+    list.innerHTML = '';
+    if (tasks.length === 0) {
+        list.innerHTML = `<p class="text-gray-400 py-8 text-center">Нет задач — добавь первую</p>`;
+        return;
+    }
+    tasks.forEach((task, i) => {
+        const li = document.createElement('li');
+        li.className = `flex items-center gap-4 bg-gray-50 px-6 py-4 rounded-2xl`;
+        li.innerHTML = `
+            <input type="checkbox" ${task.completed ? 'checked' : ''} class="w-6 h-6 accent-violet-600" onchange="toggleTask(${i})">
+            <span class="flex-1 ${task.completed ? 'completed' : ''}">${task.text}</span>
+            <button onclick="deleteTask(${i}); event.stopImmediatePropagation()" class="text-xl text-gray-400 hover:text-red-500">🗑️</button>
+        `;
+        list.appendChild(li);
+    });
+}
+
+function addTask(e) {
+    e.preventDefault();
+    const input = document.getElementById('task-input');
+    if (!input.value.trim()) return;
+    tasks.push({ text: input.value.trim(), completed: false });
+    saveTasks();
+    input.value = '';
+    renderTasks();
+    updateOverallProgress();
+}
+
+function toggleTask(i) {
+    tasks[i].completed = !tasks[i].completed;
+    saveTasks();
+    renderTasks();
+    updateOverallProgress();
+}
+
+function deleteTask(i) {
+    tasks.splice(i, 1);
+    saveTasks();
+    renderTasks();
+    updateOverallProgress();
+}
+
+// ==================== ЗАЛИВ ====================
+function renderPhones() {
+    const container = document.getElementById('phones-list');
+    container.innerHTML = '';
+
+    if (phones.length === 0 || phones.every(p => p.accounts.length === 0)) {
+        container.innerHTML = `<p class="text-center text-gray-400 py-12">Нажми кнопку "Настроить трубки и аккаунты" выше</p>`;
+        return;
+    }
+
+    phones.forEach((phone, pIndex) => {
+        let html = phone.accounts.map((acc, aIndex) => {
+            const plat = platforms[acc.platform] || {emoji:'📱', name:acc.platform};
+            return `
+            <div class="flex items-center gap-4 bg-gray-50 rounded-2xl p-5">
+                <div class="text-4xl w-12">${plat.emoji}</div>
+                <div class="flex-1">
+                    <div class="font-medium">${acc.theme || 'Без тематики'}</div>
+                    <div class="text-sm text-gray-500">${plat.name}</div>
+                </div>
+                <div class="flex gap-6 text-right">
+                    <div>
+                        <div class="text-xs text-gray-500">План</div>
+                        <input type="number" value="${acc.plan}" min="0" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].plan = parseInt(this.value)||0; savePhones(); updateOverallProgress()" 
+                               class="w-20 text-center font-semibold bg-white border rounded-xl py-2">
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-500">Залито</div>
+                        <input type="number" value="${acc.done || 0}" min="0" 
+                               onchange="phones[${pIndex}].accounts[${aIndex}].done = parseInt(this.value)||0; savePhones(); updateOverallProgress()" 
+                               class="w-20 text-center font-semibold bg-emerald-50 border border-emerald-300 rounded-xl py-2">
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+
+        const div = document.createElement('div');
+        div.className = 'border border-gray-200 rounded-3xl p-6';
+        div.innerHTML = `
+            <div class="flex items-center gap-3 mb-5">
+                <span class="text-3xl">📱</span>
+                <span class="text-xl font-semibold">${phone.name}</span>
+            </div>
+            <div class="space-y-3">${html || '<p class="text-gray-400">Нет аккаунтов</p>'}</div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function calculateZaliyProgress() {
+    let plan = 0, done = 0;
+    phones.forEach(phone => {
+        phone.accounts.forEach(acc => {
+            plan += Number(acc.plan) || 0;
+            done += Number(acc.done) || 0;
+        });
+    });
+    return plan === 0 ? 0 : Math.round((done / plan) * 100);
+}
+
+function renderZaliyResults() {
+    const container = document.getElementById('zaliy-results');
+    container.innerHTML = '';
+
+    const byPlat = { tiktok: {d:0, p:0}, youtube: {d:0, p:0}, instagram: {d:0, p:0} };
+
+    phones.forEach(phone => {
+        phone.accounts.forEach(acc => {
+            if (byPlat[acc.platform]) {
+                byPlat[acc.platform].d += Number(acc.done) || 0;
+                byPlat[acc.platform].p += Number(acc.plan) || 0;
+            }
+        });
+    });
+
+    Object.keys(byPlat).forEach(key => {
+        const item = byPlat[key];
+        const perc = item.p === 0 ? 0 : Math.round((item.d / item.p) * 100);
+        const plat = platforms[key];
+        const div = document.createElement('div');
+        div.className = 'text-center bg-white rounded-2xl p-5 shadow-sm';
+        div.innerHTML = `
+            <div class="text-5xl mb-2">${plat.emoji}</div>
+            <div class="font-semibold">${plat.name}</div>
+            <div class="text-3xl font-bold text-emerald-600 my-1">${item.d} / ${item.p}</div>
+            <div class="text-emerald-600">${perc}%</div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function updateOverallProgress() {
+    const taskPercent = tasks.length === 0 ? 0 : Math.round(tasks.filter(t => t.completed).length / tasks.length * 100);
+    const zaliyPercent = calculateZaliyProgress();
+    const overall = Math.round((taskPercent + zaliyPercent) / 2);
+
+    document.getElementById('overall-progress').textContent = overall + '%';
+    document.getElementById('overall-bar').style.width = overall + '%';
+    document.getElementById('total-zaliy-percent').textContent = zaliyPercent + '%';
+}
+
+function clearDay() {
+    if (confirm('Сбросить ВЕСЬ день? Задачи и счётчики залива обнулятся, но конфигурация трубок останется.')) {
+        tasks = [];
+        phones.forEach(phone => phone.accounts.forEach(acc => acc.done = 0));
+        saveTasks();
+        savePhones();
+        renderTasks();
+        renderPhones();
+        updateOverallProgress();
+    }
+}
+
+// ==================== ЗАПУСК ====================
+function init() {
+    loadData();
+    renderTasks();
+    renderPhones();
+    updateOverallProgress();
+    console.log('%c✅ Планировщик запущен. Данные должны сохраняться при использовании Live Server', 'color:#8b5cf6; font-size:14px');
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
